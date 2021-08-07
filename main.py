@@ -4,7 +4,7 @@ from bot import Bot
 from hidden import Hidden
 from user_information import User_information
 import youtube_dl
-
+import asyncio
 
 bot = Bot(Hidden().token())
 client = bot.connect()
@@ -14,7 +14,6 @@ client = bot.connect()
 async def on_ready():
     print('Tamo on')
     print(client.get_guild(869709006439075890).members)
-
 
 @client.command()
 async def avatar(ctx, user_reference=''):
@@ -36,21 +35,30 @@ async def avatar(ctx, user_reference=''):
             await ctx.send('Esse usuário não existe no servidor.')
 
 
-# ARRUMAR DEPOIS, TENTAR COLOCAR PLAYLIST E FAZER VERIFICAÇÕES SE ESTA NO CANAL E ETC
-
 @client.command()
-async def play(ctx, url : str):
-    song_there = os.path.isfile("song.mp3")
-    try:
-        if song_there:
-            os.remove("song.mp3")
-    except PermissionError:
-        await ctx.send("Wait for the current playing music to end or use the 'stop' command")
-        return
-
+async def join(ctx):
     voiceChannel = discord.utils.get(ctx.guild.voice_channels, name='Geral')
     await voiceChannel.connect()
+
+# ALTERAÇÕES NO PLAY
+@client.command()
+async def play(ctx, url : str):
     voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
+
+    song_there = os.path.isfile('song.mp3')
+    
+    playlist = []
+    playlist.append(url)
+
+    # CRIAR UMA CLASSE, PARA ARMAZENAR O NAME, DURATION E AS MUSICAS
+    def name(ydl):
+        info = ydl.extract_info(playlist[0])
+        name = info['title']
+        return name
+    async def duration(ydl):
+        info = ydl.extract_info(playlist[0])
+        duration = info['duration']
+        await asyncio.sleep(duration)
 
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -58,13 +66,29 @@ async def play(ctx, url : str):
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
-        }],
+        }]
     }
+
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        title = name(ydl)
+        ydl.download([playlist[0]])
+
+    try:
+        if voice.is_playing():
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                await duration(ydl) # USAR O TIME OU O DATETIME, PARA FAZER CALCULOS DO TEMPO REAL QUE ESTA TOCANDO A MUSICA
+ 
+        if song_there:
+            os.remove('song.mp3')
+            
+    except PermissionError:
+        await ctx.send("Error")
+        return
+
     for file in os.listdir("./"):
-        if file.endswith(".mp3"):
+        if file.startswith(title):
             os.rename(file, "song.mp3")
+
     voice.play(discord.FFmpegPCMAudio("song.mp3"))
 
 
