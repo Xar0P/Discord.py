@@ -1,14 +1,13 @@
-import discord
-import os
 from bot import Bot
 from hidden import Hidden
 from user_information import User_information
-import youtube_dl
-import asyncio
+import DiscordUtils
+import discord
 
 bot = Bot(Hidden().token())
 client = bot.connect()
 
+music = DiscordUtils.Music()
 
 @client.event
 async def on_ready():
@@ -35,106 +34,105 @@ async def avatar(ctx, user_reference=''):
             await ctx.send('Esse usuário não existe no servidor.')
 
 
-@client.command()
-async def join(ctx):
-    voiceChannel = discord.utils.get(ctx.guild.voice_channels, name='Geral')
-    await voiceChannel.connect()
-
-# ALTERAÇÕES NO PLAY
-@client.command()
-async def play(ctx, url : str):
-    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
-
-    song_there = os.path.isfile('song.mp3')
-    
-    playlist = []
-    playlist.append(url)
-
-    # CRIAR UMA CLASSE, PARA ARMAZENAR O NAME, DURATION E AS MUSICAS
-    def name(ydl):
-        info = ydl.extract_info(playlist[0])
-        name = info['title']
-        return name
-    async def duration(ydl):
-        info = ydl.extract_info(playlist[0])
-        duration = info['duration']
-        await asyncio.sleep(duration)
-
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }]
-    }
-
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        title = name(ydl)
-        ydl.download([playlist[0]])
-
-    try:
-        if voice.is_playing():
-            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                await duration(ydl) # USAR O TIME OU O DATETIME, PARA FAZER CALCULOS DO TEMPO REAL QUE ESTA TOCANDO A MUSICA
- 
-        if song_there:
-            os.remove('song.mp3')
-            
-    except PermissionError:
-        await ctx.send("Error")
-        return
-
-    for file in os.listdir("./"):
-        if file.startswith(title):
-            os.rename(file, "song.mp3")
-
-    voice.play(discord.FFmpegPCMAudio("song.mp3"))
-
+# @client.command()
+# async def join(ctx):
+#     await ctx.author.voice.channel.connect() #Joins author's voice channel
 
 @client.command()
 async def leave(ctx):
-    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
-    if voice.is_connected():
-        await voice.disconnect()
+    await ctx.voice_client.disconnect()
+
+@client.command()
+async def play(ctx, *, url):
+
+    try:
+        player = music.get_player(guild_id=ctx.guild.id)
+
+        if not player:
+            player = music.create_player(ctx, ffmpeg_error_betterfix=True)
+    except DiscordUtils.NotConnectedToVoice:
+        await ctx.author.voice.channel.connect()  
+        player = music.get_player(guild_id=ctx.guild.id)
+
+        if not player:
+            player = music.create_player(ctx, ffmpeg_error_betterfix=True)
+
+    
+    if not ctx.voice_client.is_playing():
+        await player.queue(url, search=True)
+
+        song = await player.play()
+        await ctx.send(f"Playing {song.name}")
     else:
-        await ctx.send("The bot is not connected to a voice channel.")
+        song = await player.queue(url, search=True)
+        await ctx.send(embed=discord.Embed(
+            title=f"Adicionado {song.name}",
+            url = song.url,
+            color = 0x690FC3,
+            description = f'Duração: {song.duration}\nCanal: [{song.channel}]({song.channel_url})'
+            ).set_author(name=ctx.author.name, icon_url=ctx.author.avatar_url
+            ).set_thumbnail(url=song.thumbnail
+            ).set_footer(text=f"Música adicionada para a lista | Loop: {'✅' if song.is_looping else '❌'}", icon_url=ctx.guild.icon.url if ctx.guild.icon is not None else "https://cdn.discordapp.com/embed/avatars/1.png"))
 
 
 @client.command()
 async def pause(ctx):
-    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
-    if voice.is_playing():
-        voice.pause()
-    else:
-        await ctx.send("Currently no audio is playing.")
-
+    player = music.get_player(guild_id=ctx.guild.id)
+    song = await player.pause()
+    await ctx.send(f"Paused {song.name}")
 
 @client.command()
 async def resume(ctx):
-    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
-    if voice.is_paused():
-        voice.resume()
-    else:
-        await ctx.send("The audio is not paused.")
-
+    player = music.get_player(guild_id=ctx.guild.id)
+    song = await player.resume()
+    await ctx.send(f"Resumed {song.name}")
 
 @client.command()
 async def stop(ctx):
-    voice = discord.utils.get(client.voice_clients, guild=ctx.guild)
-    voice.stop()
+    player = music.get_player(guild_id=ctx.guild.id)
+    await player.stop()
+    await ctx.send("Stopped")
 
+@client.command()
+async def loop(ctx):
+    player = music.get_player(guild_id=ctx.guild.id)
+    song = await player.toggle_song_loop()
+    if song.is_looping:
+        await ctx.send(f"Enabled loop for {song.name}")
+    else:
+        await ctx.send(f"Disabled loop for {song.name}")
 
+@client.command()
+async def queue(ctx):
+    player = music.get_player(guild_id=ctx.guild.id)
+    await ctx.send(f"{', '.join([song.name for song in player.current_queue()])}")
 
+@client.command(aliases=['np','tocando'])
+async def nowplaying(ctx):
+    player = music.get_player(guild_id=ctx.guild.id)
+    song = player.now_playing()
+    await ctx.send(song.name)
 
+@client.command()
+async def skip(ctx):
+    player = music.get_player(guild_id=ctx.guild.id)
+    data = await player.skip(force=True)
+    if len(data) == 2:
+        await ctx.send(f"Skipped from {data[0].name} to {data[1].name}")
+    else:
+        await ctx.send(f"Skipped {data[0].name}")
 
+@client.command()
+async def volume(ctx, vol):
+    player = music.get_player(guild_id=ctx.guild.id)
+    song, volume = await player.change_volume(float(vol) / 100) # volume should be a float between 0 to 1
+    await ctx.send(f"Changed volume for {song.name} to {volume*100}%")
 
-
-
-
-
-
-
+@client.command()
+async def remove(ctx, index):
+    player = music.get_player(guild_id=ctx.guild.id)
+    song = await player.remove_from_queue(int(index))
+    await ctx.send(f"Removed {song.name} from queue")
 
 
 bot.run()
